@@ -126,16 +126,12 @@ def getIsMotorMovingCommand(motor_id):
     except rospy.ServiceException, e:
         print "Service call failed: %s"%e
 
-    
-# TODO implement this correctly: wrapper function to call service to sync motor wheel speed
-def syncMotorWheelSpeeds(motor_ids, target_vals):
+#  wrapper function to call service to sync motor wheels
+def syncMotorWheelSpeeds(number_ids, motor_ids, target_vals):
     rospy.wait_for_service('allcmd')
     try:
         send_command = rospy.ServiceProxy('allcmd', allcmd)
-        #resp1 = send_command('SetWheelSpeedSync', motor_ids, target_vals, 0, [0], [0])
-
-        # resp1 = send_command('SetWheelSpeedSync', motor_ids[0], target_vals[0], motor_ids[1], target_vals[1], 0)
-        resp1 = send_command('SetWheelSpeedSync', motor_ids[0], target_vals[0], 1, motor_ids[1:], target_vals[1:])
+        resp1 = send_command('SetWheelSpeedSync', 0, 0, number_ids, motor_ids, target_vals)
         return resp1.val
     except rospy.ServiceException, e:
         print "Service call failed: %s"%e
@@ -149,39 +145,36 @@ def turn_degrees(degrees):
     # MOTOR WHEEL VALUES
     # COUNTER-CLOCKWISE: 0 to 1023
     # CLOCKWISE: 1024 to 2047
+
+    # LEFT WHEELS GO FORWARD, RIGHT WHEELS GO BACKWARD — i.e. all go counter-clockwise
     if degrees == 90:
-        setMotorMode(LEFT_SHOULDER, 1)
-        setMotorMode(BACK_LEFT_LEG, 1)
-        for i in range(8):
-            setMotorWheelSpeed(LEFT_SHOULDER, 900)
-            setMotorWheelSpeed(BACK_LEFT_LEG, 900)
-            # setMotorWheelSpeed(RIGHT_SHOULDER, 0)
-            # setMotorWheelSpeed(BACK_RIGHT_LEG, 0)
+        start_time = rospy.get_time()
+        while rospy.get_time() - start_time < .81: #for i in range(8):
+            syncMotorWheelSpeeds(4, (LEFT_SHOULDER, BACK_LEFT_LEG, RIGHT_SHOULDER, BACK_RIGHT_LEG), (900,900,900,900))
 
         while 1 == getIsMotorMovingCommand(LEFT_SHOULDER) == getIsMotorMovingCommand(BACK_LEFT_LEG):
             print("left motors still moving")
             pass
 
-        # TODO currently having problem where it jolts back; to fix, maybe set the speed to 0 instead of resetting the entire mode
-        setMotorMode(LEFT_SHOULDER, 0)
-        setMotorMode(BACK_LEFT_LEG, 0)
+        # STOP
+        syncMotorWheelSpeeds(4, (LEFT_SHOULDER, BACK_LEFT_LEG, RIGHT_SHOULDER, BACK_RIGHT_LEG), (0,0,1024,1024))
+
+    # LEFT WHEELS GO BACKWARDS, RIGHT WHEELS GO FORWARDS — i.e. all go clockwise
     elif degrees == -90:
-        setMotorMode(RIGHT_SHOULDER, 1)
-        setMotorMode(BACK_RIGHT_LEG, 1)
-        for i in range(8):
-            setMotorWheelSpeed(RIGHT_SHOULDER, 1024 + 900)
-            setMotorWheelSpeed(BACK_RIGHT_LEG, 1024 + 900)
-            # setMotorWheelSpeed(LEFT_SHOULDER, 0)
-            # setMotorWheelSpeed(BACK_LEFT_LEG, 0)
+        start_time = rospy.get_time()
+        while rospy.get_time() - start_time < .81: #for i in range(8):
+            syncMotorWheelSpeeds(4, (LEFT_SHOULDER, BACK_LEFT_LEG, RIGHT_SHOULDER, BACK_RIGHT_LEG), (1024 + 900, 1024 + 900, 1024 + 900, 1024 + 900))
 
         while 1 == getIsMotorMovingCommand(RIGHT_SHOULDER) == getIsMotorMovingCommand(BACK_RIGHT_LEG):
             print("right motors still moving")
             pass
 
-        setMotorMode(RIGHT_SHOULDER, 0)
-        setMotorMode(BACK_RIGHT_LEG, 0)
-        # setMotorMode(BACK_RIGHT_LEG, 0)
-        # setMotorMode(RIGHT_SHOULDER, 0)
+        # STOP
+        syncMotorWheelSpeeds(4, (LEFT_SHOULDER, BACK_LEFT_LEG, RIGHT_SHOULDER, BACK_RIGHT_LEG), (1024,1024,0,0))
+
+    elif degrees == 180:
+        print("turning around not yet implemented")
+        pass
 
 
 
@@ -209,8 +202,6 @@ def turn(dir):
     POSITION[K] = dir
 
 
-
-# TODO: Walk one cell in the given direction
 # from map.py: DIRECTION = enum(North=1, East=2, South=3, West=4)
 def walk_one_cell(dir):
     # if robot is not already facing given direction, we need to turn in that direction
@@ -218,12 +209,14 @@ def walk_one_cell(dir):
         turn(dir)
 
     # walk forward (if there is no obstacle there, we can go)
-    if starter_map.getNeighborObstacle(*POSITION) == 0:
+    if True: #starter_map.getNeighborObstacle(*POSITION) == 0:
         # TODO find out how many iterations it takes to walk 1 cell
-        setMotorWheelSpeed(LEFT_SHOULDER, 1023)
-        setMotorWheelSpeed(RIGHT_SHOULDER, 1023 + 1000)  # maybe set this to 2047
-        setMotorWheelSpeed(BACK_LEFT_LEG, 1023)
-        setMotorWheelSpeed(BACK_RIGHT_LEG, 1023 + 1000)  # maybe set this to 2047
+        start_time = rospy.get_time()
+        while rospy.get_time() - start_time < 1.52:
+            syncMotorWheelSpeeds(4, (LEFT_SHOULDER,RIGHT_SHOULDER, BACK_LEFT_LEG, BACK_RIGHT_LEG), (1023,2047,1023,2047))
+
+        # STOP
+        syncMotorWheelSpeeds(4, (LEFT_SHOULDER,RIGHT_SHOULDER, BACK_LEFT_LEG, BACK_RIGHT_LEG), (0,1024,0,1024))
 
         # Update position: new (i, j) will depend on curr (i, j, k)
         # basically either add or subtract 1 to either i or j
@@ -240,24 +233,21 @@ def walk_one_cell(dir):
 
 
 def test_localization():
+    # remember it matters which way we're looking at the robot & it should start in upper left corner facing south
     # (0, 0, 0) to (3, 0, 0)
-    walk_one_cell(DIRECTION.South)
-    walk_one_cell(DIRECTION.South)
-    walk_one_cell(DIRECTION.South)
-    walk_one_cell(DIRECTION.South)
-
+    # walk_one_cell(DIRECTION.South)
+    # walk_one_cell(DIRECTION.South)
+    # walk_one_cell(DIRECTION.South)
 
     # (0, 0, 0) to (0, 3, 0)
-    walk_one_cell(DIRECTION.East)
-    walk_one_cell(DIRECTION.East)
-    walk_one_cell(DIRECTION.East)
-    walk_one_cell(DIRECTION.East)
-
+    # walk_one_cell(DIRECTION.East)
+    # walk_one_cell(DIRECTION.East)
+    # walk_one_cell(DIRECTION.East)
 
     # (0, 0, 0) to (2, 2, 0)
     walk_one_cell(DIRECTION.South)
-    walk_one_cell(DIRECTION.South)
     walk_one_cell(DIRECTION.East)
+    walk_one_cell(DIRECTION.South)
     walk_one_cell(DIRECTION.East)
 
 
@@ -266,10 +256,10 @@ def planning():
     start = input("Enter start position: ")
     goal = input("Enter goal position: ")
 
-    # parse inputs (assumes values separated by spaces, e.g. '0 0 0')
+    # parse inputs from '0 0 0' into [0, 0, 0]
     try:
         start = list(map(int, start.split()))
-        goal = list(map(int, goal.split()))
+        goal = list(map(int, goal.split())) 
     except:
         print("planning: could not parse start and/or goal")
         return
@@ -283,62 +273,38 @@ def planning():
     # 5. walk path
 
 
-
 # Main function
 if __name__ == "__main__":
     """
-    *** TODO BEFORE FEB 6 ***
-    LOCALIZATION:
-    - maybe look more into the SetWheelSpeedSync command from the srv_wrapper
-    
+    *** TODO BEFORE FEB 8 ***
     PLANNING:
-    - look into algorithms we could use to set costs and generate paths
-    
-    *** TODO ON FEB 6 ***
-    LOCALIZATION:
-    - find how many wheel iterations it takes to travel from center of one cell to the center of the next
-        - test with test_localization(), measure error, and optimize
-    - fix turning:
-        - find how many wheel iterations it takes to turn left, right, and around
-        - find out why it jolts back at the end of a turn
-        - in order to stay centered in cell by the end of a turn, we may have to back up a little bit before turning, so we should find out by how much
+    - implement and test wave-front algorithm to set costs and generate paths
+    - given a path, find out how to generate a command sequence
     """
     rospy.init_node('example_node', anonymous=True)
     rospy.loginfo("Starting Group X Control Node...")
 
     # Print obstacle map
     starter_map.printObstacleMap()
-    #test_localization()
 
     count = 0
 
     # control loop running at 10hz
     r = rospy.Rate(10) # 10hz
     while not rospy.is_shutdown():
+        print("trying to move wheels...")
+        setMotorMode(BACK_LEFT_LEG, 1)
+        setMotorMode(BACK_RIGHT_LEG, 1)
+        setMotorMode(LEFT_SHOULDER, 1)
+        setMotorMode(RIGHT_SHOULDER, 1)
 
-        # walk_one_cell(DIRECTION.South)
+        # test_localization()
+        turn_degrees(-90)
 
-        # print("trying to move wheels...")
-        # setMotorMode(BACK_LEFT_LEG, 1)
-        # setMotorMode(BACK_RIGHT_LEG, 1)
-        # setMotorMode(LEFT_SHOULDER, 1)
-        # setMotorMode(RIGHT_SHOULDER, 1)
-
-
-        # Counting how long it takes to turn right
-        # print("the count is " + str(count))
-        # setMotorWheelSpeed(LEFT_SHOULDER, 1023)
-        # setMotorWheelSpeed(RIGHT_SHOULDER, 0)
-        # setMotorWheelSpeed(BACK_LEFT_LEG, 1023)
-        # setMotorWheelSpeed(BACK_RIGHT_LEG, 0)
-        # count += 1
-
-        #syncMotorWheelSpeeds([BACK_LEFT_LEG, BACK_RIGHT_LEG], [1000, 1000])
-
-        turn_degrees(-90) # turn left
-        #turn_degrees(90)  # turn right, seems to be working well but currently halts back at the end of the turn
-        #turn_degrees(180)  # turn around
+        # stop moving
+        syncMotorWheelSpeeds(4, (LEFT_SHOULDER,RIGHT_SHOULDER, BACK_LEFT_LEG, BACK_RIGHT_LEG), (0,1024,0,1024))
         break
+
 
         # sleep to enforce loop rate
         r.sleep()
