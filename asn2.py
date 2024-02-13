@@ -41,6 +41,8 @@ IR_PORT, GYRO_PORT = 1, 2
 POSITION = [0, 0, DIRECTION.South]
 I, J, K = 0, 1, 2
 
+# global err
+
 
 # wrapper function to call service to set a motor mode
 # 0 = set target positions, 1 = set wheel moving
@@ -144,6 +146,42 @@ def testing_gyro():
     reading = getSensorValue(GYRO_PORT)
     rospy.loginfo("Sensor value at port %d: %f", GYRO_PORT, reading)
     # syncMotorWheelSpeeds(4, (LEFT_SHOULDER, BACK_LEFT_LEG, RIGHT_SHOULDER, BACK_RIGHT_LEG), (400,400,400,400))
+def calibrate_gyro():
+    c = 0
+    err = 0
+    while(c < 200):
+        reading = getSensorValue(GYRO_PORT)
+        err += reading
+        c += 1
+
+    err = err / 200
+    return err
+
+
+
+def gyro_turn(degrees, err):
+    current_time = rospy.get_time()
+    turned = False
+    r = rospy.Rate(140)
+    angle = 0
+    i = 0
+    if degrees > 0:
+        while(angle < degrees):
+            previous_time = current_time
+            current_time = rospy.get_time()
+            elapsed_time = current_time - previous_time
+            accel = (0.4) * (getSensorValue(GYRO_PORT) - err)
+            angle -= accel * elapsed_time
+            # print(accel)
+            print(angle)
+            if i == 20:
+                i = 0
+                t_v = int(200 + (degrees - angle)/degrees * 100)
+                target_vals = (t_v, t_v, t_v, t_v)
+                syncMotorWheelSpeeds(4, (LEFT_SHOULDER, BACK_LEFT_LEG, RIGHT_SHOULDER, BACK_RIGHT_LEG), target_vals)
+            i += 1
+            r.sleep()
+            
 
 def turn_degrees(degrees):
     # MOTOR WHEEL VALUES
@@ -212,28 +250,24 @@ def walk_one_cell(dir):
         turn(dir)
 
     # walk forward (if there is no obstacle there, we can go)
-    if True: #starter_map.getNeighborObstacle(*POSITION) == 0:
-        # TODO find out how many iterations it takes to walk 1 cell
-        start_time = rospy.get_time()
-        while rospy.get_time() - start_time < 1.96:#1.52:
-            # syncMotorWheelSpeeds(4, (LEFT_SHOULDER,RIGHT_SHOULDER, BACK_LEFT_LEG, BACK_RIGHT_LEG), (1023,2047,1023,2047))
-            syncMotorWheelSpeeds(4, (LEFT_SHOULDER,RIGHT_SHOULDER, BACK_LEFT_LEG, BACK_RIGHT_LEG), (890,1024 + 800,890,1024 + 800))
+    start_time = rospy.get_time()
+    while rospy.get_time() - start_time < 2.2:#1.52:
+        # syncMotorWheelSpeeds(4, (LEFT_SHOULDER,RIGHT_SHOULDER, BACK_LEFT_LEG, BACK_RIGHT_LEG), (1023,2047,1023,2047))
+        syncMotorWheelSpeeds(4, (LEFT_SHOULDER,RIGHT_SHOULDER, BACK_LEFT_LEG, BACK_RIGHT_LEG), (910,1024 + 800,910,1024 + 800))
 
-        # STOP
-        syncMotorWheelSpeeds(4, (LEFT_SHOULDER,RIGHT_SHOULDER, BACK_LEFT_LEG, BACK_RIGHT_LEG), (0,1024,0,1024))
+    # STOP
+    syncMotorWheelSpeeds(4, (LEFT_SHOULDER,RIGHT_SHOULDER, BACK_LEFT_LEG, BACK_RIGHT_LEG), (0,1024,0,1024))
 
-        # Update position: new (i, j) will depend on curr (i, j, k)
-        # basically either add or subtract 1 to either i or j
-        if dir == DIRECTION.North:
-            POSITION[I] -= 1
-        elif dir == DIRECTION.South:
-            POSITION[I] += 1
-        elif dir == DIRECTION.West:
-            POSITION[J] -= 1
-        elif dir == DIRECTION.East:
-            POSITION[J] += 1
-    else:
-        print("walk_one_cell: cannot move, obstacle found at " + str(POSITION))
+    # Update position: new (i, j) will depend on curr (i, j, k)
+    # basically either add or subtract 1 to either i or j
+    if dir == DIRECTION.North:
+        POSITION[I] -= 1
+    elif dir == DIRECTION.South:
+        POSITION[I] += 1
+    elif dir == DIRECTION.West:
+        POSITION[J] -= 1
+    elif dir == DIRECTION.East:
+        POSITION[J] += 1
 
 def test_localization():
     # remember it matters which way we're looking at the robot & it should start in upper left corner facing south
@@ -340,6 +374,7 @@ def wavefront(a_map, start, goal):
 
 # Given the path to reach a given goal, finds out the steps to take and performs them one by one
 def generate_and_walk_commands(path):
+    print(path)
     
     for step in path:
         if step[I] == POSITION[I] - 1:
@@ -353,6 +388,10 @@ def generate_and_walk_commands(path):
         else:
             print("generate_commands(): could not generate command for: " + str(step))
             return
+
+    print(POSITION[K])
+    turn(path[len(path) - 1][K])
+    print(POSITION[K])
 
     # trying to generate multiple forward commands for smoothness
     # commands = []
@@ -373,6 +412,122 @@ def generate_and_walk_commands(path):
     # for direction, num_steps in commands:
     #     walk_one_cell(direction, num_steps)
 
+def planning(a_map):
+    # 1. be able to accept starting and ending positions from command line
+    start = raw_input("Enter start position: ")
+    goal = raw_input("Enter goal position: ")
+
+    # parse inputs from '0 0 0' into [0, 0, 0]
+    try:
+        start = list(map(int, start.split()))
+        goal = list(map(int, goal.split())) 
+    except:
+        print("planning: could not parse start and/or goal")
+        return
+
+    # 2. set the cost of each grid cell and
+    # 3. generate path from start to goal
+    path = wavefront(a_map, start, goal)
+
+    # 4. generate command sequence and
+    # 5. walk path
+    POSITION = start
+    generate_and_walk_commands(path)
+
+
+# ******************************************************************
+# **************************** MAPPING ****************************
+def mapping():
+    # always start at 0,0,0; world is always 8x8
+    start = [0, 0, DIRECTION.South]
+    new_map = EECSMap()
+    new_map.clearObstacleMap()
+
+    # 1. need wandering algoirthm
+    explore(new_map)
+
+    # 2. need wall recording mechanism
+    
+    new_map.printObstacleMap()
+
+def explore(a_map):
+    # scan left, front, and right, and update obstacle map
+    left, front, right = detect()
+    print(left_front_right_blocked)
+   
+
+    # if no left wall ---> turn left and go forward 1
+    # if left wall but no front wall ---> go forward 1
+    # if left wall and front wall ---> turn right and go forward 1
+
+    # TODO UPDATE POSITIONS AND HEADINGS ACCORDINGLY?
+    if left == front == right == 1: # turn around if at dead end
+        turn(180)
+        walk_one_cell()
+    elif left == 0: # turn left if no left wall
+        turn(-90)
+    elif left == 1 and front == 0:  # go straight, left wall following
+        walk_one_cell(POSITION[K])
+    elif left == front == 1 and right == 0: # turn right
+        turn(90)
+    
+
+    # TODO if multiple options were available, save the unvisited cells for later
+    
+    
+    
+""" FROM ASN1 PART 3: Obstacle detection 
+Has the robot turn its head and scan from left to right looking for obstacles within 15cm.
+Returns a binary list in form [left, front, right] denoting whether an obstacle was found. """
+
+def move_head(direction):
+	if direction == "LEFT":
+		setMotorTargetPositionCommand(HEAD, 512 - 300)
+	elif direction == "RIGHT":
+		setMotorTargetPositionCommand(HEAD, 512 + 300)
+	elif direction == "FRONT":
+		setMotorTargetPositionCommand(HEAD, 512)
+	else:
+		print("invalid direction")
+
+def detect():
+	blocked = [0, 0, 0]
+
+	# check left side
+	move_head("LEFT")
+	while getIsMotorMovingCommand(HEAD) == 1:
+		print("head is still moving ...left?")
+	blocked[0] = object_detected()
+
+	# check infront
+	move_head("FRONT")
+	while getIsMotorMovingCommand(HEAD) == 1:
+		print("head is still moving to center")
+	blocked[1] = object_detected()
+
+	# check right side
+	move_head("RIGHT")
+	while getIsMotorMovingCommand(HEAD) == 1:
+		print("head is still moving ...right?")
+	blocked[2] = object_detected()
+	
+	# print(blocked)
+	return blocked
+
+# Helper to determine if something is detected within 15cm.
+# Currently takes readings for 1 second, determines if it was within 15cm.
+# determining distance could probably be improved somehow?
+# also IDK if 1 second is enough/too much time
+def object_detected():
+	end = time.time() + 1
+	while time.time() < end:
+		reading = getSensorValue(IR_PORT)
+		rospy.loginfo("Sensor value at port %d: %f", IR_PORT, reading)
+		if reading >= 35:
+			return 1
+
+	return 0
+    
 
 def direction_to_turn(curr, step):
     if step[I] == curr[I] - 1:
@@ -384,63 +539,42 @@ def direction_to_turn(curr, step):
     elif step[J] == curr[J] - 1:
         return DIRECTION.West
 
-def planning(a_map):
-    # 1. be able to accept starting and ending positions from command line
-    # start = input("Enter start position: ")
-    # goal = input("Enter goal position: ")
-
-    # parse inputs from '0 0 0' into [0, 0, 0]
-    # try:
-    #     # start = list(map(int, start.split()))
-    #     # goal = list(map(int, goal.split())) 
-    # except:
-    #     print("planning: could not parse start and/or goal")
-    #     return
-
-    # 2. set the cost of each grid cell and
-    # 3. generate path from start to goal
-    start = [0, 0, DIRECTION.South]
-    goal = [7, 7, DIRECTION.East]
-    path = wavefront(a_map, start, goal)
-
-    # 4. generate command sequence and
-    # 5. walk path
-    POSITION = start
-    generate_and_walk_commands(path)
-
-
 
 # Main function
 if __name__ == "__main__":
     rospy.init_node('example_node', anonymous=True)
     rospy.loginfo("Starting Group X Control Node...")
 
+    setMotorMode(BACK_LEFT_LEG, 1)
+    setMotorMode(BACK_RIGHT_LEG, 1)
+    setMotorMode(LEFT_SHOULDER, 1)
+    setMotorMode(RIGHT_SHOULDER, 1)
+
     # HARD-CODED MAP FOR PARTS I, II, & III
     starter_map = EECSMap()
     starter_map.printObstacleMap()
 
-    count = 0
+    # err = 1050 #calibrate_gyro()
+    # print(err)
 
     # control loop running at 10hz
-    r = rospy.Rate(10) # 10hz
+    r = rospy.Rate(140) # 10hz
     while not rospy.is_shutdown():
-        print("trying to move wheels...")
-        setMotorMode(BACK_LEFT_LEG, 1)
-        setMotorMode(BACK_RIGHT_LEG, 1)
-        setMotorMode(LEFT_SHOULDER, 1)
-        setMotorMode(RIGHT_SHOULDER, 1)
-
-        test_localization()
-        # turn_degrees(-90)
+        print("about to move...")
+    
+        # test_localization()
+        # turn_degrees(90)
         # turn_degrees(180)
         # testing_gyro()
         # walk_one_cell(DIRECTION.South)
-        # planning(starter_map)
+        planning(starter_map)
+        # gyro_turn(90, err)
+        
+        
 
         # stop moving
-        # syncMotorWheelSpeeds(4, (LEFT_SHOULDER,RIGHT_SHOULDER, BACK_LEFT_LEG, BACK_RIGHT_LEG), (0,1024,0,1024))
+        syncMotorWheelSpeeds(4, (LEFT_SHOULDER,RIGHT_SHOULDER, BACK_LEFT_LEG, BACK_RIGHT_LEG), (0,1024,0,1024))
         break
-
 
         # sleep to enforce loop rate
         r.sleep()
